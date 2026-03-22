@@ -19,7 +19,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-       model = genai.GenerativeModel("gemini-2.0-flash-lite")
+       model = genai.GenerativeModel("gemini-pro")
         response = model.generate_content(SYSTEM + "\n\nCliente dice: " + update.message.text + "\n\nRispondi al cliente:")
         await update.message.reply_text(response.text)
     except Exception as e:
