@@ -10,7 +10,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 
-SYSTEM = """Sei l'assistente virtuale di SnazzyLines, un servizio italiano che vende pacchetti di contatti fornitori verificati per abbigliamento, scarpe, accessori e altro. Rispondi SEMPRE in italiano, in modo amichevole, diretto e professionale. Usa un tono giovane ma affidabile.
+SYSTEM = """Sei l'assistente virtuale di SnazzyLines, un servizio italiano che vende pacchetti di contatti fornitori verificati per abbigliamento, scarpe, accessori e altro. Rispondi SEMPRE in italiano, in modo amichevole, diretto e professionale. Usa un tono giovane ma affidabile. Usa emoji nelle risposte per renderle piu coinvolgenti. Dai risposte complete e dettagliate, non troppo corte. Struttura le risposte in modo chiaro con emoji come bullet points.
 
 INFORMAZIONI SU SNAZZYLINES:
 
@@ -62,7 +62,7 @@ REGOLE IMPORTANTI:
 3. Non discutere mai di rimborsi in dettaglio, rimanda sempre a @snazzylines
 4. Non fare promesse di guadagno
 5. Non usare parole come replica, 1:1, contraffatto
-6. Sii conciso, risposte brevi e dirette, non muri di testo
+6. Dai risposte complete ma non esagerate, usa emoji per rendere tutto piu leggibile
 7. Se qualcuno chiede il link diretto al sito, mandalo a snazzylines.store
 8. Se qualcuno e scortese o aggressivo, resta gentile e professionale
 9. Se qualcuno chiede cose non relative a SnazzyLines, rispondi brevemente e riporta la conversazione sul servizio"""
@@ -90,7 +90,7 @@ def ask_groq(user_id, message):
         return "DEBUG: " + json.dumps(result)[:500]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ciao! Sono l'assistente di SnazzyLines.\n\nPosso aiutarti con:\n- Info sui pacchetti e prezzi\n- Come funziona il servizio\n- Prezzi medi dai fornitori\n- Qualsiasi domanda su SnazzyLines\n\nScrivimi pure, sono qui per te!")
+    await update.message.reply_text("Ciao! 👋 Sono l'assistente di SnazzyLines.\n\nPosso aiutarti con:\n🛍️ Info sui pacchetti e prezzi\n📦 Come funziona il servizio\n💰 Prezzi medi dai fornitori\n❓ Qualsiasi domanda su SnazzyLines\n\nScrivimi pure, sono qui per te! 🔥")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -103,7 +103,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conversations.pop(user_id, None)
-    await update.message.reply_text("Conversazione resettata! Scrivimi pure")
+    await update.message.reply_text("Conversazione resettata! Scrivimi pure 😊")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
