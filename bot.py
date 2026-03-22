@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -18,7 +19,10 @@ def ask_gemini(message):
     }
     r = requests.post(url, json=data)
     result = r.json()
-    return result["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        return result["candidates"][0]["content"]["parts"][0]["text"]
+    except:
+        return "DEBUG FULL: " + json.dumps(result)[:500]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Ciao! Sono l'assistente di SnazzyLines.\n\nPosso aiutarti con:\n- Info sui pacchetti e prezzi\n- Come funziona il servizio\n- Prezzi medi dai fornitori\n\nScrivimi pure!")
