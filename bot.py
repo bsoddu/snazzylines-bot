@@ -82,7 +82,7 @@ def get_chat_session(user_id: int):
     """Get or create a Gemini chat session for a user"""
     if user_id not in conversations:
         model = genai.GenerativeModel(
-            model_name='gemini-2.0-flash',
+            model_name='gemini-1.5-flash',
             system_instruction=SYSTEM_PROMPT
         )
         conversations[user_id] = model.start_chat(history=[])
