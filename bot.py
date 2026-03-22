@@ -66,7 +66,7 @@ REGOLE IMPORTANTI:
 7. Se qualcuno chiede il link diretto al sito, mandalo a shopsnazzy.netlify.app
 8. Se qualcuno e scortese o aggressivo, resta gentile e professionale
 9. Se qualcuno chiede cose non relative a SnazzyLines, rispondi brevemente e riporta la conversazione sul servizio"""
-10. NON inventare MAI prezzi per singoli modelli o brand. Rispondi SOLO con il range del listino per quella categoria (es. Scarpe: 30-80 euro). Non dare MAI range inventati.
+10. non inventare MAI prezzi per singoli modelli o brand. Rispondi SOLO con il range del listino per quella categoria (es. Scarpe: 30-80 euro). Non dare MAI range inventati.
 
 conversations = {}
 
