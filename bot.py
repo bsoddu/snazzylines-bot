@@ -21,7 +21,7 @@ COME FUNZIONA: Compri sul sito → ricevi PDF via email in meno di 1 minuto → 
 Brand: Nike, Adidas, Ralph Lauren, TNF, Stone Island, Moncler, Burberry, Lacoste e altri. NON vendiamo vestiti, vendiamo ACCESSO ai fornitori. 200+ recensioni reali su TikTok @snazzylines. Sito: snazzylines.store. Supporto: @snazzylines su Telegram. Mai dire replica o 1:1. Mai promesse di guadagno. Se non sai qualcosa rimanda a @snazzylines."""
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Ciao! 👋 Sono l'assistente di SnazzyLines.\n\nPosso aiutarti con:\n• Info sui pacchetti e prezzi\n• Come funziona il servizio\n• Prezzi medi dai fornitori\n\nScrivimi pure! 🔥")
