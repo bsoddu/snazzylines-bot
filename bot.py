@@ -2,11 +2,11 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import anthropic
+import google.generativeai as genai
 
 # === CONFIG ===
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -71,44 +71,31 @@ REGOLE IMPORTANTI:
 9. Se qualcuno chiede cose non relative a SnazzyLines, rispondi brevemente e riporta la conversazione sul servizio
 """
 
-# === ANTHROPIC CLIENT ===
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+# === GEMINI CLIENT ===
+genai.configure(api_key=GEMINI_API_KEY)
 
 # Store conversation history per user (in memory)
 conversations = {}
-MAX_HISTORY = 20  # max messages to keep per user
+MAX_HISTORY = 20
+
+def get_chat_session(user_id: int):
+    """Get or create a Gemini chat session for a user"""
+    if user_id not in conversations:
+        model = genai.GenerativeModel(
+            model_name='gemini-2.0-flash',
+            system_instruction=SYSTEM_PROMPT
+        )
+        conversations[user_id] = model.start_chat(history=[])
+    return conversations[user_id]
 
 async def get_ai_response(user_id: int, user_message: str) -> str:
-    """Get response from Claude"""
-    
-    # Init or get conversation history
-    if user_id not in conversations:
-        conversations[user_id] = []
-    
-    # Add user message
-    conversations[user_id].append({"role": "user", "content": user_message})
-    
-    # Keep only last N messages
-    if len(conversations[user_id]) > MAX_HISTORY:
-        conversations[user_id] = conversations[user_id][-MAX_HISTORY:]
-    
+    """Get response from Gemini"""
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=conversations[user_id]
-        )
-        
-        assistant_message = response.content[0].text
-        
-        # Add assistant response to history
-        conversations[user_id].append({"role": "assistant", "content": assistant_message})
-        
-        return assistant_message
-    
+        chat = get_chat_session(user_id)
+        response = chat.send_message(user_message)
+        return response.text
     except Exception as e:
-        logger.error(f"Anthropic API error: {e}")
+        logger.error(f"Gemini API error: {e}")
         return "Scusa, ho avuto un problema tecnico. Riprova tra un attimo o scrivi direttamente a @snazzylines!"
 
 # === HANDLERS ===
@@ -130,10 +117,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     user_id = update.effective_user.id
     
-    # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Get AI response
     response = await get_ai_response(user_id, user_message)
     
     await update.message.reply_text(response)
@@ -148,12 +133,11 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_TOKEN non impostato!")
-    if not ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY non impostato!")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY non impostato!")
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
