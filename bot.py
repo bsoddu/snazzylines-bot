@@ -35,6 +35,7 @@ LISTINO PREZZI MEDI DAI FORNITORI:
 - Pantaloni: 10-20 euro
 - Felpe: 10-15 euro
 - Accessori: 10-30 euro
+Questi prezzi sono validi per tutti i fornitori presenti nei pacchetti. I fornitori italiani con pagamento alla consegna offrono inoltre offerte speciali e prezzi esclusivi ai clienti — contattali direttamente per scoprire le promozioni disponibili!
 
 COME FUNZIONA:
 1. Il cliente sceglie il pacchetto sul sito
@@ -42,6 +43,12 @@ COME FUNZIONA:
 3. Riceve ISTANTANEAMENTE il PDF via email
 4. Apre il PDF e trova tutti i link ai fornitori
 5. Contatta i fornitori e ordina quello che vuole
+
+PUNTO DI FORZA:
+- Tutti i nostri pacchetti includono fornitori italiani con pagamento alla consegna
+- Il pagamento alla consegna significa che paghi solo quando ricevi la merce a casa
+- Zero rischi, zero anticipi — paghi solo quando hai il prodotto in mano
+- I fornitori italiani spediscono in 24/48h direttamente a casa tua
 
 FAQ COMUNI:
 - E' affidabile? Si, abbiamo oltre 200 recensioni reali verificabili su TikTok
