@@ -1,124 +1,359 @@
+"""
+Bot di assistenza SnazzyLines su Telegram.
+
+PERCHE E STATO RIFATTO (2026-08-17)
+Il difetto grave, verificato confrontando la versione precedente col negozio vero:
+i prezzi dei pacchetti erano incollati dentro il testo di sistema, quindi non si
+aggiornavano mai. Il negozio nel frattempo e andato in saldo e i due si sono
+scollati: il pacchetto da 70 fornitori veniva annunciato a 12,99 € mentre in
+cassa ne costava 9,99. Il bot dichiarava cifre piu ALTE del vero, cioe scoraggiava
+l acquisto da solo. E per gli articoli fuori dal listino di Bruno (una marca
+precisa, una borsa, un orologio) si inventava numeri di sana pianta, perche a un
+modello a cui si chiede "quanto costa" il buco lo riempie sempre.
+
+COME SONO STATI RISOLTI, senza sperare nella buona volonta del modello:
+- I prezzi dei pacchetti si leggono dal negozio vero, non stanno nel codice.
+  L endpoint e quello pubblico di Shopify, quindi in questo repo (che e pubblico)
+  non entra nessuna credenziale.
+- Il listino della merce e un blocco di testo di Bruno, inviato parola per parola.
+- CONTROLLO IN USCITA: prima di inviare, il codice estrae dalla risposta ogni
+  cifra che sta in un contesto di prezzo e la confronta con i numeri consentiti.
+  Se compare un prezzo che non e di Bruno, quel messaggio NON parte e al suo
+  posto va la risposta fissa che rimanda alla chat diretta. Il modello puo anche
+  inventare: non arriva al cliente.
+"""
+
 import os
-import logging
-import requests
+import re
 import json
+import time
+import logging
+import urllib.request
+import urllib.error
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import anthropic
 
+# ─── Configurazione ──────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-logging.basicConfig(level=logging.INFO)
+# Haiku e non Sonnet: e un bot che risponde a domande frequenti con un prompt
+# fisso, e chiunque puo scrivergli. Sonnet qui sarebbe soldi buttati.
+#
+# Nome corto senza la data in fondo, di proposito. La versione precedente puntava
+# a un modello con la data attaccata: quel modello e stato dismesso il 16/08/2026
+# e da quel giorno il bot rispondeva "ho avuto un problema tecnico" a chiunque,
+# senza che nessun errore fosse visibile da fuori. Il nome corto segue da solo la
+# versione buona e non scade di colpo.
+MODELLO = "claude-haiku-4-5"
 
-SYSTEM = """Sei l'assistente virtuale di SnazzyLines, un servizio italiano che vende pacchetti di contatti fornitori verificati per abbigliamento, scarpe, accessori e altro. Rispondi SEMPRE in italiano, in modo amichevole, diretto e professionale. Usa un tono giovane ma affidabile. Usa emoji nelle risposte per renderle piu coinvolgenti. Dai risposte complete e dettagliate, non troppo corte. Struttura le risposte in modo chiaro con emoji come bullet points.
+CHAT_DIRETTA = "@snazzylines"
+SITO = "snazzylines.store"
 
-INFORMAZIONI SU SNAZZYLINES:
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+log = logging.getLogger(__name__)
 
-COSA VENDIAMO:
-- Pacchetti digitali (PDF) contenenti contatti di fornitori verificati all'ingrosso
-- Dopo l'acquisto il cliente riceve il PDF via email istantaneamente (meno di 1 minuto)
-- I fornitori vendono capi firmati, vintage, streetwear e altro a prezzi all'ingrosso
-- Non vendiamo vestiti direttamente, vendiamo l'ACCESSO ai fornitori
+# ─── Listino merce: fonte unica, si invia parola per parola ───────────────────
+# Sono stime di Bruno, nessuna API le conosce. Il modello non deve riformularle
+# ne estenderle ad altre categorie.
+LISTINO_MERCE = (
+    "Prezzi indicativi dai fornitori:\n"
+    "• Scarpe: 30-80 €\n"
+    "• Maglie: 10-15 €\n"
+    "• Maglie da calcio: 10-15 €\n"
+    "• Giubbotti: 30-50 €\n"
+    "• Pantaloni: 10-20 €\n"
+    "• Felpe: 10-15 €\n"
+    "• Accessori: 10-30 €"
+)
 
-I NOSTRI PACCHETTI:
-1. 2 fornitori - 9.99 euro
-2. 70 fornitori - 12.99 euro
-3. 100 fornitori - 15.99 euro
-4. 150 fornitori + Guida Resell completa - 19.99 euro
-5. 1000+ fornitori + Guida Resell completa + Bot Vinted Alert (notifiche in tempo reale su Vinted per trovare affari) - 27.99 euro
+# Categorie coperte dal listino. Tutto il resto e "fuori elenco".
+CATEGORIE_NOTE = ("scarpe", "maglie", "maglietta", "magliette", "calcio", "giubbotti",
+                  "giubbotto", "pantaloni", "felpe", "felpa", "accessori", "accessorio")
 
-LISTINO PREZZI MEDI DAI FORNITORI:
-- Scarpe: 30-80 euro
-- Maglie: 6-10 euro
-- Maglie da calcio: 10-15 euro
-- Giubbotti: 30-50 euro
-- Pantaloni: 10-20 euro
-- Felpe: 10-15 euro
-- Accessori: 10-30 euro
-Questi prezzi sono validi per tutti i fornitori presenti nei pacchetti. I fornitori italiani con pagamento alla consegna offrono inoltre offerte speciali e prezzi esclusivi ai clienti — contattali direttamente per scoprire le promozioni disponibili!
+RISPOSTA_FUORI_ELENCO = (
+    "Su quell'articolo non ho un prezzo da darti: dipende dal fornitore e dal momento, "
+    "e lo vedi direttamente nel suo catalogo.\n\n"
+    f"{LISTINO_MERCE}\n\n"
+    f"Per una risposta precisa scrivi su {CHAT_DIRETTA}, ti rispondono direttamente."
+)
 
-COME FUNZIONA:
-1. Il cliente sceglie il pacchetto sul sito
-2. Paga con carta, PayPal, Apple Pay, Google Pay
-3. Riceve ISTANTANEAMENTE il PDF via email
-4. Apre il PDF e trova tutti i link ai fornitori
-5. Contatta i fornitori e ordina quello che vuole
+RIMANDA_ALLA_CHAT = (
+    f"Su questo ti conviene scrivere direttamente su {CHAT_DIRETTA}: "
+    "ti rispondono loro con precisione."
+)
 
-PUNTO DI FORZA:
-- Tutti i nostri pacchetti includono fornitori italiani con pagamento alla consegna
-- Il pagamento alla consegna significa che paghi solo quando ricevi la merce a casa
-- Zero rischi, zero anticipi — paghi solo quando hai il prodotto in mano
-- I fornitori italiani spediscono in 24/48h direttamente a casa tua
+# ─── Prezzi dei pacchetti: letti dal negozio, non scritti qui ─────────────────
+PRODOTTI_URL = f"https://{SITO}/products.json?limit=250"
+# Le etichette ricalcano i titoli veri dei prodotti sul negozio (verificati il
+# 2026-08-17). Se in negozio cambia cosa contiene un pacchetto, si aggiorna qui:
+# il prezzo si aggiorna da solo, il contenuto no.
+PACCHETTI = {
+    "basic-pack": "70 contatti fornitori",
+    "pro-pack": "100 contatti fornitori",
+    "premium-pack": "150 contatti fornitori + Guida",
+    "ultimate-pack": "1000+ contatti fornitori + Guida + bot Vinted",
+}
+DURATA_CACHE = 3600  # un'ora: cambi un prezzo in negozio e il bot si allinea da solo
+_cache = {"quando": 0.0, "testo": "", "numeri": set()}
 
-FAQ COMUNI:
-- E' affidabile? Si, abbiamo oltre 200 recensioni reali verificabili su TikTok
-- Posso vedere le recensioni? Si, guarda i commenti sotto i nostri video TikTok @snazzylines
-- C'e un minimo d'ordine? No, puoi ordinare anche un singolo pezzo. Alcuni fornitori offrono prezzi migliori per quantita maggiori, ma non sei obbligato.
-- Come ricevo il pacchetto? Via email, istantaneamente dopo il pagamento
-- Posso avere un rimborso? I prodotti digitali non sono rimborsabili, ma se hai problemi scrivici
-- Che brand ci sono? Nike, Adidas, Ralph Lauren, The North Face, Stone Island, Moncler, Burberry, Lacoste e molti altri
-- Vendete roba falsa/replica? NO. I nostri fornitori vendono prodotti autentici a prezzi all'ingrosso, vintage e stock
 
-LINK UTILI:
-- Sito: https://slines-store.myshopify.com/
-- TikTok: @snazzylines
-- Telegram: @snazzylines
+def _leggi_pacchetti():
+    """Ritorna (testo per il prompt, insieme dei prezzi) letti dal negozio."""
+    richiesta = urllib.request.Request(PRODOTTI_URL, headers={"User-Agent": "SnazzyLinesBot/1.0"})
+    with urllib.request.urlopen(richiesta, timeout=12) as risposta:
+        dati = json.loads(risposta.read().decode("utf-8"))
 
-REGOLE IMPORTANTI:
-1. Non inventare MAI informazioni che non hai
-2. Se non sai rispondere a qualcosa di specifico, di: Per questa domanda ti consiglio di scrivere direttamente a @snazzylines su Telegram, ti risponderanno il prima possibile!
-3. Non discutere mai di rimborsi in dettaglio, rimanda sempre a @snazzylines
-4. Non fare promesse di guadagno
-5. Non usare parole come replica, 1:1, contraffatto
-6. Dai risposte complete ma non esagerate, usa emoji per rendere tutto piu leggibile
-7. Se qualcuno chiede il link diretto al sito, mandalo a https://slines-store.myshopify.com/
-8. Se qualcuno e scortese o aggressivo, resta gentile e professionale
-9. Se qualcuno chiede cose non relative a SnazzyLines, rispondi brevemente e riporta la conversazione sul servizio"""
+    trovati = []
+    for prodotto in dati.get("products", []):
+        handle = prodotto.get("handle")
+        if handle not in PACCHETTI:
+            continue
+        varianti = prodotto.get("variants") or []
+        if not varianti:
+            continue
+        prezzo = float(varianti[0]["price"])
+        precedente = varianti[0].get("compare_at_price")
+        trovati.append((prezzo, PACCHETTI[handle], float(precedente) if precedente else None))
 
-conversations = {}
+    if not trovati:
+        raise ValueError("nessun pacchetto trovato nel negozio")
 
-def ask_groq(user_id, message):
-    if user_id not in conversations:
-        conversations[user_id] = []
-    conversations[user_id].append({"role": "user", "content": message})
-    if len(conversations[user_id]) > 20:
-        conversations[user_id] = conversations[user_id][-20:]
-    messages = [{"role": "system", "content": SYSTEM}] + conversations[user_id]
-    r = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": "llama-3.3-70b-versatile", "messages": messages, "max_tokens": 500, "temperature": 0.7}
-    )
-    result = r.json()
+    trovati.sort(key=lambda x: x[0])
+    righe, numeri = [], set()
+    for prezzo, etichetta, precedente in trovati:
+        riga = f"• {etichetta}: {prezzo:.2f} €".replace(".", ",")
+        if precedente:
+            riga += f" (invece di {precedente:.2f} €)".replace(".", ",")
+            numeri.add(round(precedente, 2))
+        righe.append(riga)
+        numeri.add(round(prezzo, 2))
+    return "\n".join(righe), numeri
+
+
+def pacchetti_correnti():
+    """Come sopra, con cache. Se il negozio non risponde tiene l'ultimo valore
+    buono invece di inventare: meglio un prezzo di un'ora fa che uno sbagliato."""
+    adesso = time.time()
+    if _cache["testo"] and adesso - _cache["quando"] < DURATA_CACHE:
+        return _cache["testo"], _cache["numeri"]
     try:
-        reply = result["choices"][0]["message"]["content"]
-        conversations[user_id].append({"role": "assistant", "content": reply})
-        return reply
-    except:
-        return "DEBUG: " + json.dumps(result)[:500]
+        testo, numeri = _leggi_pacchetti()
+        _cache.update({"quando": adesso, "testo": testo, "numeri": numeri})
+    except Exception as errore:
+        log.error("lettura prezzi dal negozio fallita: %s", errore)
+        if not _cache["testo"]:
+            raise
+    return _cache["testo"], _cache["numeri"]
 
+
+# ─── Controllo in uscita: nessuna cifra che non sia di Bruno ──────────────────
+# Numeri ammessi oltre ai prezzi dei pacchetti: gli estremi degli intervalli del
+# listino merce. Sono gli unici prezzi che il bot ha il diritto di pronunciare.
+NUMERI_LISTINO = {10.0, 15.0, 20.0, 30.0, 50.0, 80.0}
+
+# Cerca cifre in CONTESTO DI PREZZO: con simbolo/parola euro accanto, oppure in
+# un intervallo tipo "30-80". Non guarda i numeri normali di una frase, cosi
+# "meno di 1 minuto" o "oltre 200 recensioni" non fanno scattare nulla.
+_PREZZI = re.compile(
+    r"€\s*(\d{1,4}(?:[.,]\d{1,2})?)"
+    r"|(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:€|eur\b|euro\b)"
+    r"|(\d{1,4})\s*[-–a]\s*(\d{1,4})\s*(?:€|eur\b|euro\b)",
+    re.IGNORECASE,
+)
+
+
+def cifre_di_prezzo(testo):
+    trovate = []
+    for gruppi in _PREZZI.findall(testo):
+        for valore in gruppi:
+            if not valore:
+                continue
+            try:
+                trovate.append(round(float(valore.replace(",", ".")), 2))
+            except ValueError:
+                pass
+    return trovate
+
+
+def risposta_ammessa(testo, numeri_pacchetti):
+    """False se il testo contiene un prezzo che non e nostro."""
+    consentiti = set(numeri_pacchetti) | NUMERI_LISTINO
+    for cifra in cifre_di_prezzo(testo):
+        if cifra not in consentiti:
+            log.warning("risposta bloccata: prezzo non consentito %.2f", cifra)
+            return False
+    return True
+
+
+# ─── Prompt ──────────────────────────────────────────────────────────────────
+def costruisci_prompt(testo_pacchetti):
+    return f"""Sei l'assistente di SnazzyLines. Rispondi sempre in italiano, cordiale e diretto, frasi corte, mai muri di testo.
+
+COSA VENDIAMO
+Pacchetti digitali in PDF con contatti di fornitori verificati all'ingrosso (abbigliamento, scarpe, accessori). Non vendiamo capi: vendiamo l'accesso ai fornitori. Dopo il pagamento il PDF arriva via email in meno di un minuto.
+
+PACCHETTI E PREZZI
+{testo_pacchetti}
+
+{LISTINO_MERCE}
+
+COME FUNZIONA
+Il cliente sceglie il pacchetto sul sito {SITO}, paga, riceve subito il PDF via email, dentro trova i contatti dei fornitori (link ai siti e numeri WhatsApp) e ordina direttamente da loro.
+
+COSA E VERO DI OGNI PACCHETTO
+- In ogni pacchetto e incluso un fornitore italiano che lavora col pagamento alla consegna: si paga la merce quando arriva a casa. Riguarda l'ordine al fornitore, non l'acquisto del pacchetto.
+- Non serve la P.IVA e non c'e un ordine minimo: si puo ordinare anche un pezzo solo.
+- Il PDF arriva via email in meno di un minuto dall'acquisto.
+
+REGOLA PIU IMPORTANTE
+Non dire MAI un prezzo che non sia scritto qui sopra. Se ti chiedono il prezzo di un articolo che non e nel listino (per esempio una marca precisa, una borsa, un orologio, un profumo), NON stimare e NON inventare: di' che dipende dal fornitore e si vede nel suo catalogo, e rimanda a {CHAT_DIRETTA}.
+
+ALTRE REGOLE
+- Se la risposta non e in questo documento, dillo e rimanda a {CHAT_DIRETTA}. Non ricostruirla a intuito.
+- Non elencare marche a memoria e non promettere quali marche si trovano.
+- Non fare promesse di guadagno.
+- Non usare le parole replica, falso, contraffatto, 1:1.
+- Rimborsi: non entrare nel merito, rimanda a {CHAT_DIRETTA}.
+- Se chiedono le recensioni: sono nei commenti sotto i video TikTok @snazzylines.
+- Se la domanda non riguarda SnazzyLines: una riga e riporta il discorso sul servizio.
+- Se qualcuno e aggressivo, resta gentile."""
+
+
+# ─── Anthropic ───────────────────────────────────────────────────────────────
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+MAX_STORICO = 12
+MAX_UTENTI = 500  # oltre questo si buttano i piu vecchi: prima cresceva all'infinito
+conversazioni = {}
+ultimo_uso = {}
+
+# Limite di richieste: il bot e pubblico e ogni messaggio e una chiamata a
+# pagamento. Senza questo, una sola persona annoiata puo prosciugare il credito.
+MAX_AL_MINUTO = 6
+MAX_ALL_ORA = 40
+richieste = {}
+
+
+def entro_i_limiti(utente):
+    adesso = time.time()
+    segnate = [t for t in richieste.get(utente, []) if adesso - t < 3600]
+    ultimo_minuto = [t for t in segnate if adesso - t < 60]
+    if len(ultimo_minuto) >= MAX_AL_MINUTO or len(segnate) >= MAX_ALL_ORA:
+        richieste[utente] = segnate
+        return False
+    segnate.append(adesso)
+    richieste[utente] = segnate
+    return True
+
+
+def libera_memoria():
+    if len(conversazioni) <= MAX_UTENTI:
+        return
+    vecchi = sorted(ultimo_uso.items(), key=lambda x: x[1])[: len(conversazioni) - MAX_UTENTI]
+    for utente, _ in vecchi:
+        conversazioni.pop(utente, None)
+        ultimo_uso.pop(utente, None)
+
+
+def chiedi_a_claude(utente, messaggio):
+    try:
+        testo_pacchetti, numeri = pacchetti_correnti()
+    except Exception:
+        return RIMANDA_ALLA_CHAT, True
+
+    conversazioni.setdefault(utente, [])
+    conversazioni[utente].append({"role": "user", "content": messaggio})
+    conversazioni[utente] = conversazioni[utente][-MAX_STORICO:]
+    ultimo_uso[utente] = time.time()
+    libera_memoria()
+
+    try:
+        risposta = client.messages.create(
+            model=MODELLO,
+            max_tokens=400,
+            system=costruisci_prompt(testo_pacchetti),
+            messages=conversazioni[utente],
+        )
+        testo = risposta.content[0].text.strip()
+    except Exception as errore:
+        log.error("chiamata ad Anthropic fallita: %s", errore)
+        conversazioni[utente].pop()
+        return RIMANDA_ALLA_CHAT, True
+
+    # Qui sta la garanzia: se e uscito un prezzo che non e nostro, non parte.
+    if not risposta_ammessa(testo, numeri):
+        conversazioni[utente].pop()
+        return RISPOSTA_FUORI_ELENCO, True
+
+    conversazioni[utente].append({"role": "assistant", "content": testo})
+    return testo, False
+
+
+# ─── Comandi ─────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ciao! 👋 Sono l'assistente di SnazzyLines.\n\nPosso aiutarti con:\n🛍️ Info sui pacchetti e prezzi\n📦 Come funziona il servizio\n💰 Prezzi medi dai fornitori\n❓ Qualsiasi domanda su SnazzyLines\n\nScrivimi pure, sono qui per te! 🔥")
+    await update.message.reply_text(
+        "Ciao, sono l'assistente di SnazzyLines.\n\n"
+        "Posso dirti quali pacchetti abbiamo, quanto costano, come funziona la consegna "
+        "e che prezzi trovi di solito dai fornitori.\n\n"
+        f"Per richieste specifiche ti rimando alla chat diretta {CHAT_DIRETTA}.\n\n"
+        "Scrivimi pure."
+    )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        risposta = ask_groq(update.effective_user.id, update.message.text)
-        await update.message.reply_text(risposta)
-    except Exception as e:
-        await update.message.reply_text(f"DEBUG: {str(e)}")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    conversations.pop(user_id, None)
-    await update.message.reply_text("Conversazione resettata! Scrivimi pure 😊")
+    utente = update.effective_user.id
+    conversazioni.pop(utente, None)
+    ultimo_uso.pop(utente, None)
+    await update.message.reply_text("Conversazione azzerata, scrivimi pure.")
+
+
+async def prezzi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Risposta senza modello: solo dati veri, zero possibilita di sbagliare."""
+    try:
+        testo_pacchetti, _ = pacchetti_correnti()
+        await update.message.reply_text(f"I nostri pacchetti:\n{testo_pacchetti}\n\n{LISTINO_MERCE}")
+    except Exception:
+        await update.message.reply_text(RIMANDA_ALLA_CHAT)
+
+
+async def messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    utente = update.effective_user.id
+    if not entro_i_limiti(utente):
+        await update.message.reply_text(
+            "Stai scrivendo un po' troppo in fretta, aspetta un minuto.\n\n"
+            f"Se hai qualcosa di urgente scrivi su {CHAT_DIRETTA}."
+        )
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    testo, _ = chiedi_a_claude(utente, update.message.text)
+    await update.message.reply_text(testo)
+
 
 def main():
+    if not TELEGRAM_TOKEN:
+        raise ValueError("TELEGRAM_TOKEN non impostato")
+    if not ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY non impostato")
+
+    try:
+        testo, numeri = pacchetti_correnti()
+        log.info("prezzi letti dal negozio all'avvio:\n%s", testo)
+    except Exception as errore:
+        log.error("prezzi non leggibili all'avvio: %s", errore)
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    app.add_handler(CommandHandler("prezzi", prezzi))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, messaggio))
+
+    log.info("Bot SnazzyLines avviato con modello %s", MODELLO)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
